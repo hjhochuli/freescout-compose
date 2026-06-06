@@ -1,0 +1,97 @@
+services:
+  freescout-app:
+    image: ghcr.io/tiredofit/docker-freescout:latest
+    container_name: freescout-app
+    depends_on:
+      freescout_db:
+        condition: service_healthy
+    volumes:
+      - freescout_data:/data
+      - freescout_logs:/www/logs
+    environment:
+      - DB_HOST=freescout_db
+      - DB_NAME=${DB_NAME}
+      - DB_USER=${DB_USER}
+      - DB_PASS=${DB_PASS}
+      - APP_NAME=${APP_NAME}
+      - SITE_URL=${SITE_URL}
+      - TIMEZONE=${TIMEZONE}
+      - ADMIN_EMAIL=${ADMIN_EMAIL}
+      - ADMIN_FIRST_NAME=${ADMIN_FIRST_NAME}
+      - ADMIN_LAST_NAME=${ADMIN_LAST_NAME}
+      - ADMIN_PASS=${ADMIN_PASS}
+    ports:
+      - "${APP_PORT:-8080}:80"
+    networks:
+      - freescout_network
+    restart: unless-stopped
+
+  freescout_db:
+    image: mariadb:10.11
+    container_name: freescout_db
+    volumes:
+      - db_data:/var/lib/mysql
+    environment:
+      - MYSQL_ROOT_PASSWORD=${DB_ROOT_PASS}
+      - MYSQL_DATABASE=${DB_NAME}
+      - MYSQL_USER=${DB_USER}
+      - MYSQL_PASSWORD=${DB_PASS}
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--su-mysql", "--connect", "--innodb_initialized"]
+      start_period: 30s
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - freescout_network
+    restart: unless-stopped
+
+  freescout_scheduler:
+    image: alpine:latest
+    container_name: freescout_scheduler
+    restart: unless-stopped
+    depends_on:
+      - freescout-app
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    command:
+      - sh
+      - -c
+      - |
+        apk add --no-cache docker-cli
+        echo '*/5 * * * * docker exec freescout-app php /www/html/artisan fetch:emails >> /var/log/fetch.log 2>&1' | crontab -
+        crond -f -l 2
+    networks:
+      - freescout_network
+
+  freescout_db-backup:
+    image: tiredofit/db-backup:latest
+    container_name: freescout_db-backup
+    depends_on:
+      freescout_db:
+        condition: service_healthy
+    volumes:
+      - /mnt/user/appdata/freescout/backups:/backup
+    environment:
+      - DB_TYPE=mariadb
+      - DB_HOST=freescout_db
+      - DB_NAME=${DB_NAME}
+      - DB_USER=${DB_USER}
+      - DB_PASS=${DB_PASS}
+      - DB_BACKUP_BEGIN=${BACKUP_BEGIN:-0200}
+      - DB_BACKUP_INTERVAL=${BACKUP_INTERVAL:-1440}
+      - DB_CLEANUP_TIME=${BACKUP_CLEANUP_TIME:-10080}
+      - COMPRESSION=GZ
+      - CHECKSUM=SHA1
+    networks:
+      - freescout_network
+    restart: unless-stopped
+
+volumes:
+  freescout_data:
+  freescout_logs:
+  db_data:
+
+networks:
+  freescout_network:
+    driver: bridge
